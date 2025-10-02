@@ -1,0 +1,86 @@
+name: Reusable - Auto Add Reviewers
+
+on:
+  workflow_call:
+    inputs:
+      required_reviewers:
+        description: 'Lista de reviewers obrigatórios (separados por vírgula)'
+        required: true
+        type: string
+      target_branch:
+        description: 'Branch de destino'
+        required: false
+        type: string
+        default: 'main'
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  add-reviewers:
+    name: 👥 Adicionar Reviewers
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Adicionar reviewers automaticamente ao PR
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const reviewersList = '${{ inputs.required_reviewers }}'.split(',')
+            .map(u => u.trim());
+
+          const pr = context.payload.pull_request;
+          if (!pr) {
+            core.setFailed('Não foi possível identificar o PR.');
+            return;
+          }
+
+          const { owner, repo } = context.repo;
+          const prNumber = pr.number;
+          const prAuthor = pr.user.login;
+
+          core.info(`📋 Processando PR #${prNumber} criado por @${prAuthor}`);
+
+          // Remove o autor do PR da lista de reviewers (não pode revisar próprio PR)
+          const filteredReviewers = reviewersList.filter(reviewer => 
+            reviewer.toLowerCase() !== prAuthor.toLowerCase()
+          );
+
+          if (filteredReviewers.length === 0) {
+            core.notice('ℹ️ Nenhum reviewer para adicionar - o autor do PR é o único usuário autorizado.');
+            
+            // Adiciona comentário informativo
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: prNumber,
+              body: `## 👤 Autor é Revisor\n\n**@${prAuthor}**, você é o autor deste PR e também está na lista de reviewers autorizados.\n\n⚠️ **Atenção:** Você não pode aprovar seu próprio PR. Solicite review de outro colaborador se possível.\n\n---\n\n*💡 PRs precisam de aprovação de outro usuário para manter a qualidade do código.*`
+            });
+            return;
+          }
+
+          try {
+            core.info(`👥 Adicionando reviewers: ${filteredReviewers.join(', ')}`);
+
+            // Adiciona os reviewers ao PR
+            await github.rest.pulls.requestReviewers({
+              owner,
+              repo,
+              pull_number: prNumber,
+              reviewers: filteredReviewers
+            });
+
+            core.notice(`✅ Reviewers adicionados com sucesso: @${filteredReviewers.join(', @')}`);
+            core.notice(`🔔 Notificações enviadas para os reviewers.`);
+
+          } catch (error) {
+            core.setFailed(`❌ Erro ao adicionar reviewers: ${error.message}`);
+            
+            // Tenta adicionar comentário sobre o erro
+            try {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: prNumber,
+                body: `## ⚠️ Erro ao Adicionar Reviewers\n\nNão foi possível adicionar os reviewers automaticamente.\n\n**Erro:** ${error.message}\n\n**Ação necessária:** Por favor, adicione manualmente os reviewers: @${filteredReviewers.join(', @')}\n\n---\n\n*Este é um problema técnico temporário.*`
+              });
+            } catch (commentError) {
+              core.warning(`Não foi possível adicionar comentário de erro: ${commentError.message}`);
+            }
+          }

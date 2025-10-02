@@ -1,0 +1,146 @@
+name: Reusable - Require Specific Approver
+
+on:
+  workflow_call:
+    inputs:
+      required_approvers:
+        description: 'Lista de aprovadores obrigatórios (separados por vírgula)'
+        required: true
+        type: string
+      target_branch:
+        description: 'Branch de destino para proteção'
+        required: false
+        type: string
+        default: 'main'
+      blocked_label:
+        description: 'Label para PRs aguardando aprovação'
+        required: false
+        type: string
+        default: '⚠️ Aguardando Aprovação'
+      approved_label:
+        description: 'Label para PRs aprovados'
+        required: false
+        type: string
+        default: '✅ Aprovado para Merge'
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  gatekeeper:
+    name: ⚠️ Aprovação Obrigatória
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Verificar aprovação de usuários autorizados
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const requiredList = '${{ inputs.required_approvers }}'.split(',')
+            .map(u => u.trim().toLowerCase());
+
+          const blockedLabel = '${{ inputs.blocked_label }}';
+          const approvedLabel = '${{ inputs.approved_label }}';
+
+          const pr = context.payload.pull_request;
+          if (!pr) {
+            core.setFailed('Não foi possível identificar o PR.');
+            return;
+          }
+
+          const { owner, repo } = context.repo;
+          const prNumber = pr.number;
+          const headSha = pr.head.sha;
+
+          // Busca todas as reviews do PR
+          const { data: reviews } = await github.rest.pulls.listReviews({
+            owner, repo, pull_number: prNumber, per_page: 100
+          });
+
+          // Filtra aprovações no commit atual feitas por algum dos usuários obrigatórios
+          const approvals = reviews.filter(r =>
+            requiredList.includes(r.user?.login?.toLowerCase()) &&
+            r.state === 'APPROVED' &&
+            r.commit_id === headSha
+          );
+
+          if (approvals.length === 0) {
+            // Remove label de aprovado (se existir)
+            try {
+              await github.rest.issues.removeLabel({
+                owner, repo, issue_number: prNumber,
+                name: approvedLabel
+              });
+            } catch (error) {
+              // Label não existe, ignora
+            }
+
+            // Adiciona label de bloqueio
+            try {
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: prNumber,
+                labels: [blockedLabel]
+              });
+            } catch (error) {
+              core.warning(`Não foi possível adicionar label: ${error.message}`);
+            }
+
+            // Verifica se já existe comentário do bot para não poluir
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: prNumber, per_page: 100
+            });
+            
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('⚠️ Aprovação Obrigatória')
+            );
+
+            // Só adiciona comentário se não existir um do bot
+            if (!botComment) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: prNumber,
+                body: `## ⚠️ Aprovação Obrigatória\n\n**Este PR não pode ser mergeado ainda!**\n\nÉ necessária a aprovação de pelo menos **um usuário autorizado** no último commit antes de fazer o merge.\n\n### 👥 Usuários Autorizados\n@${requiredList.join(', @')}\n\n### 📋 Próximos Passos\n1. ✅ Solicite review de um dos usuários autorizados\n2. ⏳ Aguarde a aprovação\n3. ✅ Após aprovação, o status check ficará verde\n4. 🚀 Merge liberado!\n\n---\n\n💡 **Dica:** Você pode continuar trabalhando e fazendo commits. O workflow sempre valida o último commit.`
+              });
+            }
+            
+            core.setFailed(`⚠️ Aguardando aprovação de: ${requiredList.join(', ')} - Merge bloqueado até aprovação válida`);
+          } else {
+            // Remove label de bloqueio (se existir)
+            try {
+              await github.rest.issues.removeLabel({
+                owner, repo, issue_number: prNumber,
+                name: blockedLabel
+              });
+            } catch (error) {
+              // Label não existe, ignora
+            }
+
+            // Adiciona label de aprovado
+            try {
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: prNumber,
+                labels: [approvedLabel]
+              });
+            } catch (error) {
+              core.warning(`Não foi possível adicionar label de aprovação: ${error.message}`);
+            }
+
+            // Adiciona comentário de sucesso (apenas uma vez)
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: prNumber, per_page: 100
+            });
+            
+            const successComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('✅ **PR Aprovado**')
+            );
+
+            if (!successComment) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: prNumber,
+                body: `## ✅ PR Aprovado e Liberado para Merge!\n\n**Aprovado por:** @${approvals[0].user.login}\n\n🎉 Este PR possui aprovação válida de um usuário autorizado.\n\n### ✅ Você pode fazer o merge agora!\n\nO status check está verde e o merge foi liberado.`
+              });
+            }
+
+            core.notice(`✅ APROVADO por @${approvals[0].user.login} - Merge liberado!`);
+          }
