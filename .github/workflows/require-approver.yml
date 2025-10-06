@@ -7,11 +7,6 @@ on:
         description: 'Lista de aprovadores obrigatórios (separados por vírgula)'
         required: true
         type: string
-      target_branch:
-        description: 'Branch de destino para proteção'
-        required: false
-        type: string
-        default: 'main'
       blocked_label:
         description: 'Label para PRs aguardando aprovação'
         required: false
