@@ -7,11 +7,6 @@ on:
         description: 'Lista de reviewers obrigatórios (separados por vírgula)'
         required: true
         type: string
-      target_branch:
-        description: 'Branch de destino'
-        required: false
-        type: string
-        default: 'main'
 
 permissions:
   pull-requests: write
