@@ -27,13 +27,30 @@ jobs:
     name: ⚠️ Aprovação Obrigatória
     runs-on: ubuntu-24.04
     steps:
+    - name: Garantir que os labels existam
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const {owner, repo} = context.repo;
+          const labels = ['${{ inputs.blocked_label }}','${{ inputs.approved_label }}'];
+
+          for (const name of labels) {
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name });
+            } catch {
+              await github.rest.issues.createLabel({
+                owner, repo, name,
+                color: 'ededed',
+                description: `Label usada por workflow de aprovação (${name})`
+              });
+            }
+          }
+          
     - name: Verificar aprovação de usuários autorizados
       uses: actions/github-script@v7
       with:
         script: |
-          const requiredList = '${{ inputs.required_approvers }}'.split(',')
-            .map(u => u.trim().toLowerCase());
-
+          const requiredList = '${{ inputs.required_approvers }}'.split(',').map(u => u.trim().toLowerCase());
           const blockedLabel = '${{ inputs.blocked_label }}';
           const approvedLabel = '${{ inputs.approved_label }}';
 
